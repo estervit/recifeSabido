@@ -8,6 +8,7 @@ CONTEXT_FAIXAS_TRANSPORTE = os.path.abspath(os.path.join(os.path.dirname(__file_
 CONTEXT_LOCAIS_POSTOS = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/context_locaisPostos.json'))
 CONTEXT_POSTOS_VACINA = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/context_postoVacina.json'))
 CONTEXT_TRANSPORTE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/context_transport.json'))
+CONTEXT_NOVA_BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/context_transport.json'))
 
 
 

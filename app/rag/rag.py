@@ -5,15 +5,9 @@ from groq import Groq
 from db.conection_qdrant import search_similar_documents, create_collection_if_not_exists
 from cache.cag import get_cached_response, set_cached_response
 from embeddings.embeddings import generate_embeddings_from_context_file
-from config.config import CONTEXT_DADOS_ESCOLA
-from config.config import CONTEXT_DATAS_VACINAS
-from config.config import CONTEXT_DICIONARIO_VACINAS
-from config.config import CONTEXT_ESCOLAS_MUNICIPAIS
-from config.config import CONTEXT_FAIXAS_TRANSPORTE
-from config.config import CONTEXT_LOCAIS_POSTOS
-from config.config import CONTEXT_POSTOS_VACINA
-from config.config import CONTEXT_TRANSPORTE
-
+from config.config import (CONTEXT_DADOS_ESCOLA, CONTEXT_DATAS_VACINAS, CONTEXT_DICIONARIO_VACINAS,
+                           CONTEXT_ESCOLAS_MUNICIPAIS, CONTEXT_FAIXAS_TRANSPORTE, CONTEXT_LOCAIS_POSTOS,
+                           CONTEXT_POSTOS_VACINA, CONTEXT_TRANSPORTE, CONTEXT_NOVA_BASE)
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -51,57 +45,65 @@ Dica: Sempre forneça a resposta mais completa possível, respeitando as diretri
 """
 
 def select_top_documents(similar_documents, max_documents=10):
+    if not isinstance(similar_documents, list):  # Verifica se é uma lista válida
+        logging.error(f"Formato inesperado para similar_documents: {type(similar_documents)}")
+        return []
+
     if not similar_documents:
         return []
 
-    if isinstance(similar_documents[0], dict):
-        sorted_documents = sorted(similar_documents, key=lambda x: x.get('score', 0), reverse=True)
-    else:
-        sorted_documents = similar_documents[:max_documents]
-    
+    sorted_documents = sorted(similar_documents, key=lambda x: x.get('score', 0), reverse=True)
+    return sorted_documents[:max_documents]
+
+def select_top_documents(similar_documents, max_documents=10):
+    if not isinstance(similar_documents, list):  # Verifica se é uma lista válida
+        logging.error(f"Formato inesperado para similar_documents: {type(similar_documents)} | Valor: {similar_documents}")
+        return []
+
+    if not similar_documents:
+        return []
+
+    sorted_documents = sorted(similar_documents, key=lambda x: x.get('score', 0), reverse=True)
     return sorted_documents[:max_documents]
 
 def get_rag_response(prompt: str, similar_documents):
-    context_escola_dados = CONTEXT_DADOS_ESCOLA
-    context_vacinas_datas = CONTEXT_DATAS_VACINAS
-    context_vacinas_dicionarios = CONTEXT_DICIONARIO_VACINAS
-    context_municipais_escolas = CONTEXT_ESCOLAS_MUNICIPAIS
-    context_transporte_faixa = CONTEXT_FAIXAS_TRANSPORTE
-    context_postos_locais = CONTEXT_LOCAIS_POSTOS
-    context_vacinas_postos = CONTEXT_POSTOS_VACINA
-    context_veiculo = CONTEXT_TRANSPORTE
-
-    embeddings = generate_embeddings_from_context_file(context_escola_dados)
-    embeddings = generate_embeddings_from_context_file(context_vacinas_datas)
-    embeddings = generate_embeddings_from_context_file(context_vacinas_dicionarios)
-    embeddings = generate_embeddings_from_context_file(context_municipais_escolas)
-    embeddings = generate_embeddings_from_context_file(context_transporte_faixa)
-    embeddings = generate_embeddings_from_context_file(context_postos_locais)
-    embeddings = generate_embeddings_from_context_file(context_vacinas_postos)
-    embeddings = generate_embeddings_from_context_file(context_veiculo)
+    contexts = [CONTEXT_DADOS_ESCOLA, CONTEXT_DATAS_VACINAS, CONTEXT_DICIONARIO_VACINAS, 
+                CONTEXT_ESCOLAS_MUNICIPAIS, CONTEXT_FAIXAS_TRANSPORTE, CONTEXT_LOCAIS_POSTOS, 
+                CONTEXT_POSTOS_VACINA, CONTEXT_TRANSPORTE, CONTEXT_NOVA_BASE]
+    
+    embeddings = []
+    for context in contexts:
+        embeddings.extend(generate_embeddings_from_context_file(context))
+    
     logging.debug(f"Embeddings gerados: {len(embeddings)} registros")
     
     cached_response = get_cached_response(prompt)
     if cached_response:
         logging.debug(f"Resposta em cache encontrada para o prompt: {prompt}")
         return cached_response
-
+    
     logging.debug(f"Buscando documentos semelhantes para o prompt: {prompt}")
-    search_results = search_similar_documents(prompt)
-    logging.debug(f"Documentos semelhantes encontrados: {len(search_results) if search_results else 0}")
 
-    similar_documents = search_results if search_results else []
+    # Verificação extra do tipo de similar_documents
+    if not isinstance(similar_documents, list):
+        logging.error(f"Erro: similar_documents não é uma lista. Tipo recebido: {type(similar_documents)} | Valor: {similar_documents}")
+        similar_documents = []  # Força uma lista vazia para evitar erros
+
     top_documents = select_top_documents(similar_documents)
     logging.debug(f"Top {len(top_documents)} documentos selecionados para contexto")
 
     context = "\n\n".join(embeddings) if embeddings else ""
-    
+
     if top_documents:
         context += "\n\nAh, encontrei algumas informações que podem ser úteis:\n"
         for doc in top_documents:
-            content = doc.get('content', 'Sem conteúdo disponível') if isinstance(doc, dict) else doc
+            if isinstance(doc, dict):
+                content = doc.get('content', 'Sem conteúdo disponível')
+            else:
+                logging.warning(f"Documento inesperado encontrado: {doc}")
+                content = "Erro ao processar documento."
             context += f"• {content}\n"
-    
+
     max_context_length = 2000
     if len(context) > max_context_length:
         logging.debug("Contexto muito grande, truncando para 2000 caracteres...")
@@ -110,29 +112,30 @@ def get_rag_response(prompt: str, similar_documents):
     if not context.strip():
         logging.debug("Nenhum contexto encontrado para a resposta.")
         return "Desculpe, não encontrei informações suficientes para responder sua pergunta. Se quiser reformular, estou aqui para ajudar!"
-
+    
     messages = [
         {"role": "system", "content": "Você é Aurora, uma IA especializada em fornecer informações sobre a cidade de Recife. Responda com base no contexto, construa a melhor resposta com uma abordagem clara para o usuário. Lembre-se de sempre consultar o contexto antes de responder. Não mencione o contexto na saída final."},
         {"role": "user", "content": PROMPT_TEMPLATE.format(context=context, question=prompt)}
     ]
-    
+
     try:
         logging.debug("Enviando requisição para a API do Groq...")
         chat_completion = client.chat.completions.create(messages=messages, model="llama-3.3-70b-versatile")
+
+        if not chat_completion or not hasattr(chat_completion, 'choices') or not chat_completion.choices:
+            logging.error("Resposta inválida da API do Groq.")
+            return "Erro ao gerar a resposta. Por favor, tente novamente."
+
+        response = chat_completion.choices[0].message.content.strip()
     except Exception as e:
         logging.error(f"Erro ao chamar a API do Groq: {e}")
         return "Desculpe, ocorreu um erro ao gerar a resposta."
-
-    if not chat_completion.choices:
-        logging.debug("Nenhuma escolha retornada pela API do Groq.")
-        return "Desculpe, não consegui gerar uma resposta."
     
-    response = chat_completion.choices[0].message.content.strip()
     logging.debug(f"Resposta gerada pelo modelo: {response}")
-    
+
     if not response or response.startswith(".\n"):
         logging.debug("Resposta vazia ou inválida detectada.")
         response = "Desculpe, acho que algo deu errado! Pode repetir sua dúvida?"
-
+    
     set_cached_response(prompt, response)
     return response
