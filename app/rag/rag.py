@@ -21,7 +21,8 @@ client = Groq(api_key=api_key)
 create_collection_if_not_exists()
 
 PROMPT_TEMPLATE = """
-Você é a Aurora, uma IA especializada em fornecer informações sobre a cidade de Recife. Seu conhecimento se limita exclusivamente aos dados contidos nos arquivos JSON fornecidos. Sempre que for responder, siga estas diretrizes
+"Você é a Aurora, uma IA especializada em fornecer informações sobre a cidade de Recife em educação,saúde e transporte. Seu conhecimento se limita exclusivamente aos dados contidos nos arquivos JSON fornecidos..."
+
 Contexto relevante:
 {context}
 
@@ -46,36 +47,51 @@ Dica: Sempre forneça a resposta mais completa possível, respeitando as diretri
 
 def select_top_documents(similar_documents, max_documents=10):
     if not isinstance(similar_documents, list):  # Verifica se é uma lista válida
-        logging.error(f"Formato inesperado para similar_documents: {type(similar_documents)}")
-        return []
-
-    if not similar_documents:
-        return []
-
-    sorted_documents = sorted(similar_documents, key=lambda x: x.get('score', 0), reverse=True)
-    return sorted_documents[:max_documents]
-
-def select_top_documents(similar_documents, max_documents=10):
-    if not isinstance(similar_documents, list):  # Verifica se é uma lista válida
         logging.error(f"Formato inesperado para similar_documents: {type(similar_documents)} | Valor: {similar_documents}")
         return []
 
-    if not similar_documents:
+    valid_documents = [doc for doc in similar_documents if isinstance(doc, dict)]
+    
+    if not valid_documents:
+        logging.error("Nenhum documento válido encontrado.")
         return []
 
-    sorted_documents = sorted(similar_documents, key=lambda x: x.get('score', 0), reverse=True)
+    sorted_documents = sorted(valid_documents, key=lambda x: x.get('score', 0), reverse=True)
+    logging.debug(f"Top {len(sorted_documents)} documentos selecionados por pontuação.")
     return sorted_documents[:max_documents]
 
 def get_rag_response(prompt: str, similar_documents):
-    contexts = [CONTEXT_DADOS_ESCOLA, CONTEXT_DATAS_VACINAS, CONTEXT_DICIONARIO_VACINAS, 
-                CONTEXT_ESCOLAS_MUNICIPAIS, CONTEXT_FAIXAS_TRANSPORTE, CONTEXT_LOCAIS_POSTOS, 
-                CONTEXT_POSTOS_VACINA, CONTEXT_TRANSPORTE, CONTEXT_NOVA_BASE]
+    contexts = [ CONTEXT_DADOS_ESCOLA, CONTEXT_DATAS_VACINAS, CONTEXT_DICIONARIO_VACINAS, 
+    CONTEXT_ESCOLAS_MUNICIPAIS, CONTEXT_FAIXAS_TRANSPORTE, CONTEXT_LOCAIS_POSTOS, 
+    CONTEXT_POSTOS_VACINA, CONTEXT_TRANSPORTE, CONTEXT_NOVA_BASE]
     
-    embeddings = []
-    for context in contexts:
-        embeddings.extend(generate_embeddings_from_context_file(context))
+    # Embeddings para saúde e educação
+    health_and_education_contexts = [
+        CONTEXT_DADOS_ESCOLA,
+        CONTEXT_DATAS_VACINAS,
+        CONTEXT_DICIONARIO_VACINAS,
+        CONTEXT_ESCOLAS_MUNICIPAIS,
+        CONTEXT_POSTOS_VACINA
+    ]
     
-    logging.debug(f"Embeddings gerados: {len(embeddings)} registros")
+    # Função que gera embeddings de todos os contextos
+    def generate_all_embeddings(contexts):
+        embeddings = []
+        for context in contexts:
+            try:
+                embeddings_from_context = generate_embeddings_from_context_file(context)
+                embeddings.extend(embeddings_from_context)
+                logging.debug(f"Embeddings gerados para o contexto {context}: {len(embeddings_from_context)} registros")
+            except Exception as e:
+                logging.error(f"Erro ao gerar embeddings para o contexto {context}: {e}")
+        return embeddings
+    
+    embeddings = generate_all_embeddings(contexts)
+    health_and_education_embeddings = generate_all_embeddings(health_and_education_contexts)
+    
+    embeddings.extend(health_and_education_embeddings)
+    
+    logging.debug(f"Total de embeddings gerados: {len(embeddings)} registros")
     
     cached_response = get_cached_response(prompt)
     if cached_response:
@@ -84,25 +100,26 @@ def get_rag_response(prompt: str, similar_documents):
     
     logging.debug(f"Buscando documentos semelhantes para o prompt: {prompt}")
 
-    # Verificação extra do tipo de similar_documents
     if not isinstance(similar_documents, list):
         logging.error(f"Erro: similar_documents não é uma lista. Tipo recebido: {type(similar_documents)} | Valor: {similar_documents}")
-        similar_documents = []  # Força uma lista vazia para evitar erros
-
+        similar_documents = []  
+    
     top_documents = select_top_documents(similar_documents)
     logging.debug(f"Top {len(top_documents)} documentos selecionados para contexto")
 
     context = "\n\n".join(embeddings) if embeddings else ""
-
+    logging.debug(f"Contexto inicial gerado com {len(context)} caracteres.")
+    
     if top_documents:
         context += "\n\nAh, encontrei algumas informações que podem ser úteis:\n"
         for doc in top_documents:
             if isinstance(doc, dict):
                 content = doc.get('content', 'Sem conteúdo disponível')
+                context += f"• {content}\n"
             else:
                 logging.warning(f"Documento inesperado encontrado: {doc}")
                 content = "Erro ao processar documento."
-            context += f"• {content}\n"
+                context += f"• {content}\n"
 
     max_context_length = 2000
     if len(context) > max_context_length:
